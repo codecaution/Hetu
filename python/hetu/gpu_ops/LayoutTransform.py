@@ -3,11 +3,11 @@ import numpy as np
 from torch import embedding
 from .Node import Op
 from .._base import DNNL_LIB
-from ..gpu_links import dispatch_encode_top1, dispatch_encode_top2
-from ..gpu_links import dispatch_encode_top1_gradient
+from ..gpu_links import layout_transform_top1, layout_transform_top2
+from ..gpu_links import layout_transform_top1_gradient
 from .AddElewise import add_op
 
-class DispatchEncodeOp(Op):
+class LayoutTransformOp(Op):
     def __init__(self, input, indices_s, location_s, capacity, total_experts, ctx=None):
         
         input_node_list = [input, ]
@@ -16,7 +16,7 @@ class DispatchEncodeOp(Op):
         for node in location_s:
             input_node_list.append(node)
 
-        super().__init__(DispatchEncodeOp, input_node_list, ctx)
+        super().__init__(LayoutTransformOp, input_node_list, ctx)
         self.capacity = capacity
         self.topK = len(indices_s)
         self.total_experts = total_experts
@@ -27,20 +27,20 @@ class DispatchEncodeOp(Op):
             raise NotImplementedError
         else:
             if self.topK == 1:
-                dispatch_encode_top1(input_vals[0], input_vals[1], input_vals[2],\
+                layout_transform_top1(input_vals[0], input_vals[1], input_vals[2],\
                                         output_val, self.capacity, stream_handle)
             elif self.topK == 2:
-                dispatch_encode_top2(input_vals[0], input_vals[1], input_vals[2], input_vals[3],\
+                layout_transform_top2(input_vals[0], input_vals[1], input_vals[2], input_vals[3],\
                                         input_vals[4], output_val, self.capacity, stream_handle)
             else:
                 raise NotImplementedError
 
     def gradient(self, output_grad):
         if self.topK == 1:
-            return [dispatch_encode_gradient_op(output_grad, self.inputs[1], self.inputs[2], self.capacity, ctx=self.raw_ctx),]+[None,]*2
+            return [layout_transform_gradient_op(output_grad, self.inputs[1], self.inputs[2], self.capacity, ctx=self.raw_ctx),]+[None,]*2
         elif self.topK == 2:
-            result_1 = dispatch_encode_gradient_op(output_grad, self.inputs[1], self.inputs[3], self.capacity, ctx=self.raw_ctx)
-            result_2 = dispatch_encode_gradient_op(output_grad, self.inputs[2], self.inputs[4], self.capacity, ctx=self.raw_ctx)
+            result_1 = layout_transform_gradient_op(output_grad, self.inputs[1], self.inputs[3], self.capacity, ctx=self.raw_ctx)
+            result_2 = layout_transform_gradient_op(output_grad, self.inputs[2], self.inputs[4], self.capacity, ctx=self.raw_ctx)
             result = add_op(result_1, result_2, ctx = self.raw_ctx)
             return [result,]+[None,]*4
         else:
@@ -59,17 +59,17 @@ class DispatchEncodeOp(Op):
         else:
             status.set_state(None, 1)
 
-class DispatchEncodeGradientOp(Op):
+class LayoutTransformGradientOp(Op):
     def __init__(self, input, indice, location, capacity, ctx=None):
         input_node_list = [input, indice, location]
-        super().__init__(DispatchEncodeGradientOp, input_node_list, ctx)
+        super().__init__(LayoutTransformGradientOp, input_node_list, ctx)
         self.capacity = capacity
 
     def compute(self, input_vals, output_val, stream_handle=None):
         if self.on_cpu:
             raise NotImplementedError
         else:
-            dispatch_encode_top1_gradient(input_vals[0], input_vals[1], input_vals[2], output_val, self.capacity, stream_handle)
+            layout_transform_top1_gradient(input_vals[0], input_vals[1], input_vals[2], output_val, self.capacity, stream_handle)
 
     def infer_shape(self, input_shapes):
         model_dim = input_shapes[0][-1]
@@ -80,7 +80,7 @@ class DispatchEncodeGradientOp(Op):
         raise NotImplementedError
 
 
-def dispatch_encode_op(input, indices_s, location_s, capacity, total_experts, ctx=None):
+def layout_transform_op(input, indices_s, location_s, capacity, total_experts, ctx=None):
     """Calculate the dispatch encode.
 
     Parameters:
@@ -94,7 +94,7 @@ def dispatch_encode_op(input, indices_s, location_s, capacity, total_experts, ct
     A new Node instance created by Op.
 
     """
-    return DispatchEncodeOp(input, indices_s, location_s, capacity, total_experts, ctx=ctx)
+    return LayoutTransformOp(input, indices_s, location_s, capacity, total_experts, ctx=ctx)
 
-def dispatch_encode_gradient_op(input, indice, location,capacity, ctx=None):
-    return DispatchEncodeGradientOp(input, indice, location, capacity, ctx=ctx)
+def layout_transform_gradient_op(input, indice, location,capacity, ctx=None):
+    return LayoutTransformGradientOp(input, indice, location, capacity, ctx=ctx)

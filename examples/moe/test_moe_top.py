@@ -1,15 +1,16 @@
 import numpy as np
 import hetu as ht
 from hetu import layers as htl
-from tester import HetuTester
 import argparse
 import logging
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+import time
+myrank=0
 
 def print_rank0(msg):
-    if device_id == 0:
+    if myrank == 0:
         logger.info(msg)
 
 
@@ -25,11 +26,12 @@ def moe(args, x, y_):
     model = htl.MoELayer(gate = gate, experts = experts, num_tokens = args.num_tokens, embed_dim = args.model_dim, all2all_size=num_gpus, top=args.top)
 
     y, l_aux = model(x)
-            
-    loss = ht.softmaxcrossentropy_op(y, y_)
-    loss = ht.reduce_mean_op(loss, [0])
+
+    y=ht.array_reshape_op(y, [-1, args.num_tokens, args.model_dim])
+    y=ht.reduce_sum_op(y, axes = 2)
+    y=ht.softmax_op(y)
+    loss=ht.nll_loss_op(y, y_, args.num_tokens)
     loss = loss + l_aux
-#    loss = l_aux
     
 
     return loss, y
@@ -58,14 +60,18 @@ if __name__ == "__main__":
     print_rank0("Training MoE Examples on HETU")
     comm = ht.wrapped_mpi_nccl_init()
     device_id = comm.local_rank
+    myrank = comm.myRank.value
+    print("device_id: ", device_id)
     executor_ctx = ht.gpu(device_id % 8)
     x_val = np.random.normal(size = (args.batch_size, args.num_tokens, args.model_dim))
+    x_val = ht.array(arr=x_val, ctx=executor_ctx)
     x = ht.Variable(name='x', ctx=executor_ctx, trainable=False)
     n_classes=2048
     targets = np.random.randint(0, high=n_classes, size=(args.batch_size*args.num_tokens))
-    y_val=np.eye(n_classes)[targets]
+    y_val=np.zeros(shape=(args.batch_size,), dtype=np.float32)
+    y_val=ht.array(arr=y_val, ctx=executor_ctx)
     y_ = ht.Variable(name='y_', ctx=executor_ctx, trainable=False)
-    opt = ht.optim.SGDOptimizer(learning_rate=0.00125)
+    opt = ht.optim.SGDOptimizer(learning_rate=0.125)
 
     loss, y = moe(args, x, y_)
     train_op = opt.minimize(loss)
@@ -73,12 +79,20 @@ if __name__ == "__main__":
 
     executor = ht.Executor(eval_nodes, ctx=executor_ctx,
                            comm_mode=args.comm_mode)
-    
-    for i in range(10000):
+    average_time=0.0
+    for i in range(300):
         print_rank0("Step %d" % i)
+        start=time.time()        
         loss_val, predict_y, y_val, _  = executor.run(
             'train', eval_node_list=[loss, y, y_, train_op], feed_dict={x:x_val, y_: y_val})
-        print_rank0("Train loss = %f" % loss_val.asnumpy())
-    
+        loss_numpy=loss_val.asnumpy()
+        end=time.time()
+        print_rank0("Train loss = %f" % loss_numpy)
+        print_rank0("Step time = %s sec."%(end-start))
+       
+        if i+10>=30:
+            average_time+=end-start
+
     print_rank0("Success!")
+    print_rank0("Average synced step_time=%s sec."%(average_time/10))
 

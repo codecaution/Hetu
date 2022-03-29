@@ -51,6 +51,33 @@ __global__ void backward_data(const float* input_data, float* indices_s_data, fl
     }
 }
 
+
+__global__ void forward_no_gate(const float* input_data, float* indices_s_data, float* location_s_data, float* output_data, int capacity, int samples, int hidden){
+    for (int i = blockIdx.x; i < samples; i += gridDim.x){
+        if (location_s_data[i] < capacity && indices_s_data[i] >= 0) {                        
+            for (int j = threadIdx.x; j < hidden; j += 1024){                                        
+                atomicAdd(&output_data[((int)indices_s_data[i] * capacity + (int)location_s_data[i]) * (hidden) + j], input_data[i * (hidden) + j]);
+            }    
+        }         
+    }
+}
+
+__global__ void backward_data_no_gate(const float* input_data, float* indices_s_data, float* location_s_data, float* output_data, int capacity, int samples, int hidden){ 
+    for (int i = blockIdx.x; i < samples; i += gridDim.x){            
+        if (location_s_data[i] < capacity && (int)indices_s_data[i] >= 0) {                        
+            for (int j = threadIdx.x; j < hidden; j += 1024){
+                output_data[i * hidden + j] = input_data[(((int)indices_s_data[i]) * capacity + (int)location_s_data[i]) * (hidden) + j];                                                 
+            }                                   
+        }else{ 
+            for (int j = threadIdx.x; j < hidden; j += 1024){
+                output_data[i*hidden+j]=0;                                                 
+            }                                  
+        }         
+    }
+}
+
+
+
 __global__ void backward_gate(const float* dispatched_input_data, float* reshaped_input_data, float* indices_s_data, float* location_s_data, float* output_data, int capacity, int samples, int hidden){
     if(location_s_data[(int)blockIdx.x]>=capacity || indices_s_data[(int)blockIdx.x]<0){
         if((int)threadIdx.x==0){
@@ -88,7 +115,7 @@ __global__ void backward_gate(const float* dispatched_input_data, float* reshape
     return;
 }
 
-int DLGpuDispatchEncodeTop1(const DLArrayHandle input, DLArrayHandle indices_s, DLArrayHandle location_s,
+int DLGpuLayoutTransformTop1(const DLArrayHandle input, DLArrayHandle indices_s, DLArrayHandle location_s,
     DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
    
 
@@ -127,7 +154,7 @@ int DLGpuDispatchEncodeTop1(const DLArrayHandle input, DLArrayHandle indices_s, 
 }
 
 
-int DLGpuDispatchEncodeTop2(const DLArrayHandle input, DLArrayHandle indices_s1, DLArrayHandle indices_s2, DLArrayHandle location_s1, DLArrayHandle location_s2, DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
+int DLGpuLayoutTransformTop2(const DLArrayHandle input, DLArrayHandle indices_s1, DLArrayHandle indices_s2, DLArrayHandle location_s1, DLArrayHandle location_s2, DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
     
     assert(input->ndim == 2); // (num_sample * model_dim)
     int samples = input->shape[0];
@@ -161,7 +188,7 @@ int DLGpuDispatchEncodeTop2(const DLArrayHandle input, DLArrayHandle indices_s1,
     return 0;
 }
 
-int DLGpuDispatchDecodeTop1(const DLArrayHandle input, DLArrayHandle indices_s, DLArrayHandle location_s, DLArrayHandle gates, \
+int DLGpuReverseLayoutTransformTop1(const DLArrayHandle input, DLArrayHandle indices_s, DLArrayHandle location_s, DLArrayHandle gates, \
             DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
     assert(input->ndim == 2);
     assert(output->ndim == 2);
@@ -189,7 +216,7 @@ int DLGpuDispatchDecodeTop1(const DLArrayHandle input, DLArrayHandle indices_s, 
     return 0;
 }
 
-int DLGpuDispatchDecodeTop2(const DLArrayHandle input, DLArrayHandle indices_s1, DLArrayHandle indices_s2, DLArrayHandle location_s1, \
+int DLGpuReverseLayoutTransformTop2(const DLArrayHandle input, DLArrayHandle indices_s1, DLArrayHandle indices_s2, DLArrayHandle location_s1, \
             DLArrayHandle location_s2, DLArrayHandle gates_1, DLArrayHandle gates_2, DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
     assert(input->ndim == 2);
     assert(output->ndim == 2);
@@ -226,7 +253,7 @@ int DLGpuDispatchDecodeTop2(const DLArrayHandle input, DLArrayHandle indices_s1,
     return 0;
 }
 
-int DLGpuDispatchEncodeTop1Gradient(const DLArrayHandle input, DLArrayHandle indice, DLArrayHandle location, DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
+int DLGpuLayoutTransformTop1Gradient(const DLArrayHandle input, DLArrayHandle indice, DLArrayHandle location, DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
     assert(input->ndim == 2);
     assert(output->ndim == 2);
     int samples = output->shape[0];
@@ -251,7 +278,7 @@ int DLGpuDispatchEncodeTop1Gradient(const DLArrayHandle input, DLArrayHandle ind
 }
 
 
-int DLGpuDispatchDecodeTop1GradientData(const DLArrayHandle input, DLArrayHandle indice, DLArrayHandle location, DLArrayHandle gate, DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
+int DLGpuReverseLayoutTransformTop1GradientData(const DLArrayHandle input, DLArrayHandle indice, DLArrayHandle location, DLArrayHandle gate, DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
     assert(input->ndim==2);
     assert(output->ndim==2);
     int samples = input->shape[0];
@@ -282,7 +309,7 @@ int DLGpuDispatchDecodeTop1GradientData(const DLArrayHandle input, DLArrayHandle
 }
 
 
-int DLGpuDispatchDecodeTop2GradientData(const DLArrayHandle input, DLArrayHandle indice_1, DLArrayHandle indice_2, DLArrayHandle location_1, DLArrayHandle location_2, DLArrayHandle gate_1, DLArrayHandle gate_2, DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
+int DLGpuReverseLayoutTransformTop2GradientData(const DLArrayHandle input, DLArrayHandle indice_1, DLArrayHandle indice_2, DLArrayHandle location_1, DLArrayHandle location_2, DLArrayHandle gate_1, DLArrayHandle gate_2, DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
     assert(input->ndim==2);
     assert(output->ndim==2);
     int samples = input->shape[0];
@@ -320,7 +347,7 @@ int DLGpuDispatchDecodeTop2GradientData(const DLArrayHandle input, DLArrayHandle
     return 0;
 }
 
-int DLGpuDispatchDecodeTop1GradientGate(const DLArrayHandle combined_output,DLArrayHandle expert_output, DLArrayHandle indice, DLArrayHandle location, DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
+int DLGpuReverseLayoutTransformTop1GradientGate(const DLArrayHandle combined_output,DLArrayHandle expert_output, DLArrayHandle indice, DLArrayHandle location, DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
     
     assert(combined_output->ndim==2);
     assert(expert_output->ndim==2);
@@ -350,3 +377,56 @@ int DLGpuDispatchDecodeTop1GradientGate(const DLArrayHandle combined_output,DLAr
 
     return 0;
 }
+
+
+int DLGpuReverseLayoutTransformNoGate(const DLArrayHandle input, DLArrayHandle indices_s, DLArrayHandle location_s, \
+                    DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
+    assert(input->ndim == 2);       
+    assert(output->ndim == 2);            
+    int samples = output->shape[0];                
+    int model_dim = output->shape[1];
+    assert(indices_s->ndim == 2);
+    assert(indices_s->shape[1] == 1);                            
+    assert(location_s->ndim == 1);                                               
+    assert(output->ndim==2);                       
+    const float* input_data = (const float*)input->data;                        
+    float* indices_s_data = (float*)indices_s->data;                                                
+    float* location_s_data = (float*)location_s->data;                                                
+    float* output_data = (float*)output->data;                                        
+    dim3 blocks;                                          
+    dim3 threads;            
+    blocks.x = 128;             
+    threads.x = 1024;               
+    if(stream_handle){             
+        backward_data_no_gate<<<blocks, threads, 0, *(cudaStream_t *)stream_handle->handle>>>(input_data, indices_s_data, location_s_data, output_data, capacity, samples, model_dim);                       
+    }else{                                                                                                    
+        backward_data_no_gate<<<blocks, threads>>>(input_data, indices_s_data, location_s_data, output_data, capacity, samples, model_dim);
+    }                                                                                
+    return 0;
+}
+
+int DLGpuReverseLayoutTransformNoGateGradient(const DLArrayHandle input, DLArrayHandle indice, DLArrayHandle location, DLArrayHandle output, int capacity, DLStreamHandle stream_handle){
+    assert(input->ndim==2);
+    assert(output->ndim==2);
+    int samples = input->shape[0];
+    int model_dim =  input->shape[1];
+    assert(indice->ndim==2);
+    assert(indice->shape[1]==1);                        
+    assert(location->ndim==1);                                                  
+    float* input_data = (float*)input->data;                                        
+    float* output_data = (float*)output->data;                                        
+    float* indice_data = (float*)indice->data;
+    float* location_data = (float*)location->data;
+    dim3 threads;                                      
+    dim3 blocks;
+    blocks.x = 128;            
+    threads.x = 1024;
+               
+    if(stream_handle){
+        forward_no_gate<<<blocks, threads, 0, *(cudaStream_t *)stream_handle->handle>>>(input_data, indice_data, location_data, output_data, capacity, samples, model_dim);                  
+    }else{ 
+        forward_no_gate<<<blocks, threads>>>(input_data, indice_data, location_data,output_data, capacity, samples, model_dim);      
+    }                                                                            
+    return 0;
+}
+

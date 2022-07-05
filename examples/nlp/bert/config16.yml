@@ -1,0 +1,6 @@
+nodes:
+  - host: ts-a51b6cb8f0724455ada0e8f11866db7f-launcher
+    workers: 8
+    chief: true
+  - host: ts-a51b6cb8f0724455ada0e8f11866db7f-worker-0
+    workers: 8
